@@ -17,6 +17,4 @@ run: testcmpopt
 clean:
 	rm -f  testcmpopt.o
 
-configure:
-	cmpopt make > cmpopt.mk
 
