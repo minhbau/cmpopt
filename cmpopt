@@ -1,0 +1,902 @@
+#!/bin/bash
+#
+# cmpopt - find the compute and compilation environment and
+#          suggests variables to set for optimal compilation
+#
+#          Note: many of the options just come from documentation and
+#          still have to be tested.
+#
+# Copyright (c) 2019 Ramses van Zon
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
+
+set -eo pipefail
+
+WARN() {
+    echo "WARNING ($(basename $0)):" "$@" 1>&2
+}
+
+ERROR() {
+    echo "ERROR in $1 ($(basename $0)):" "${@:2}" 1>&2
+    false
+}
+
+TESTARGUMENTS() {
+    localhowmany() { echo $#; }
+    expectedargcount=$(localhowmany ${3-})
+    receivedargcount=$1    
+    unset localhowmany
+    if [ "${expectedargcount}" != "${receivedargcount}" ]; then
+        if [ "${expectedargcount}" = 0 ]; then
+            ERROR "function ${FUNCNAME[1]}" "requires no arguments, but got ${receivedargcount}, i.e.: $2 (from function ${FUNCNAME[2]})"
+        elif [ "${receivedargcount}" = 0 ]; then
+            ERROR "function ${FUNCNAME[1]}" "requires ${expectedargcount} arguments ($3), but got ${receivedargcount} (from ${FUNCNAME[2]})"
+        else
+            ERROR "function ${FUNCNAME[1]}" "requires ${expectedargcount} arguments ($3), but got ${receivedargcount}, i.e.: $2 (from ${FUNCNAME[2]})"
+        fi
+    fi
+}
+
+if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
+    cat <<-EOF
+	'cmpopt' finds the compute and compilation environment 
+	         of the current machine and suggests variables 
+	         to set for compilation. 
+	
+	Usage:
+	   cmpopt [-h|--help|make|bash|bash-env|tcsh|tcsh-env|c|c++|python]
+
+	Arguments:
+	   -h  --help     This help text
+	   bash           Variable assignments for use in bash
+	   tcsh           Variable assignments for use in tcsh
+	   c              Variable assignments for use in C
+	   c++            Variable assignments for use in C++
+	   make           Variable assignments for use in 'Makefile's
+	   python         Variable assignments for use in python
+	   bash-env       Environment variable assignments for use in bash
+	   tcsh-env       Environment variable assignments for use in tcsh
+	   
+	Produces code for variable assignments in the language set by the command lines
+	argument or the current shell, for the following variables:
+
+	  - Operating system and hardware properties:
+	      SYSTEMNAME SYSTEMVERSION OS OSVERSION CPU GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
+
+	  - C compiler and options:
+	      CC*  CFLAGS*  CFLAGSOPT  CCOMPILERVERSION  OPENMPCFLAGS  OPENMPCLDFLAGS 
+	      OPENMPGPUCFLAGS OPENMPGPUCLDFLAGS 
+
+	  - C++ compiler and options:
+	      CXX*  CXXFLAGS*  CXXFLAGSOPT  CXXCOMPILERVERSION  OPENMPCXXFLAGS 
+	      OPENMPCXXLDFLAGS  OPENMPGPUCXXFLAGS  OPENMPGPUCXXLDFLAGS 
+
+	  - Fortran compiler and options:
+	      FC*  FFLAGS*  FORTRANCOMPILERVERSION  FFLAGSOPT  OPENMPFFLAGS  
+	      OPENMPFLDFLAGS  OPENMPGPUFFLAGS  OPENMPGPUFLDFLAGS  F77
+
+	  - Hardware properties compiler and options:
+	      
+
+	  - CUDA compiler and options
+	      CUDACXX*  CUDAFLAGS*  CUDAHOSTCXX*  CUDACOMPILERVERSION  CUDAHOSTCXXCOMPILERVERSION 
+	      CUDAFLAGSOPT  CUDAFLAGSOMP  CUDALINKFLAGSOMP
+   
+	Note that if any of these variables are already set in the environment, 
+	'detectcomp' takes the values in the environment instead of detecting them.
+EOF
+    exit 
+fi
+
+# Functions to detect various aspects of the compilation environment
+
+detectsystemname() {
+    TESTARGUMENTS $# "$*"
+    uname -s
+}
+
+detectsystemversion() {
+    TESTARGUMENTS $# "$*"
+    uname -r
+}
+
+detectmachine() {
+    TESTARGUMENTS $# "$*"
+    uname -m
+}
+
+detectvendor()
+{
+    TESTARGUMENTS $# "$*" "machinearch" 
+    local machinearch=$1
+    case "${machinearch}" in
+        x86_64)
+            grep vendor_id /proc/cpuinfo | head -1 | sed -n 's/vendor_id\s*:\s\([a-zA-Z0-9]*\).*/\L\1/p'
+            ;;
+        ppc64|ppc64le)
+            echo "IBM"
+            ;;
+        *)
+            WARN "Cannot find cpu vendor"
+    esac
+
+}
+
+detectcpu() {
+    TESTARGUMENTS $# "$*" "machinearch"
+    local machinearch=$1
+    case "${machinearch}" in
+        x86_64)
+            local usegcc=gcc
+            if ! which ${usegcc} &> /dev/null; then
+                usegcc=core-gcc
+            fi
+            if ! which ${usegcc} &> /dev/null; then
+                WARN "Cannot determine cpu"
+            else
+                local cpu=$(${usegcc} -march=native -Q --help=target|grep '  -march=' | awk '{print $2}')
+                if [ "${cpu}" = knl ]; then
+                    # check that is gcc version < 8, because it could be skylake too
+                    local gccversion=$(detectcompilerversion ${usegcc})
+                    if ((${gccversion%%.*} < 8)); then
+                        local model=$(grep 'model\s*:' /proc/cpuinfo | awk '{print $3}' | uniq)
+                        if [ "${model}" = 85 ]; then
+                            cpu=skylake-avx512
+                        fi
+                    fi
+                fi
+                echo ${cpu}
+            fi
+            ;;
+        ppc64|ppc64le)
+            grep cpu /proc/cpuinfo | head -1 | sed -n 's/cpu\s*:\s\([a-zA-Z0-9]*\).*/\L\1/p'
+            ;;
+        *)
+            WARN "Cannot determine cpu"
+    esac
+}
+
+detectos() {
+    TESTARGUMENTS $# "$*"
+    if [ -f /etc/os-release ]; then
+        sed -n -e 's/^ID=//p' /etc/os-release | tr -d '"'
+    elif [ -f /etc/redhat-release ]; then
+        if grep -qi Enterprise /etc/redhat-release; then
+            echo 'rhel'
+        elif grep -qi CentOS /etc/redhat-release; then
+            echo 'centos'
+        fi
+    fi
+}
+
+detectosversion() {
+    TESTARGUMENTS $# "$*"
+    if [ -f /etc/os-release ]; then
+        sed -n -e 's/^VERSION_ID=//p' /etc/os-release | tr -d '"'
+    elif [ -f /etc/redhat-release ]; then
+        sed -n -e 's/.*\s\([0-9][0-9.]*\).*/\1/p' /etc/redhat-release
+    fi
+}
+
+detectcc() {
+    TESTARGUMENTS $# "$*"
+    local cc
+    local trycc
+    for trycc in core-gcc gcc pathcc icc xlc_r bgxlc_r pgcc; do
+        if [ -e "$(which ${trycc} 2>&1)" ] ; then
+            cc=${trycc}
+        fi
+    done
+    echo ${cc}
+}
+
+detectcxx() {
+    TESTARGUMENTS $# "$*"
+    local cxx
+    local trycxx
+    for trycxx in core-g++ g++ pathCC icpc xlC_r bgxlC_r pgc++; do
+        if [ -e "$(which ${trycxx} 2>&1)" ] ; then
+            cxx=${trycxx}
+        fi
+    done
+    echo ${cxx}
+}
+
+detectfc() {
+    TESTARGUMENTS $# "$*"
+    local fc
+    local tryfc
+    for tryfc in core-gfortran gfortran pathf95 ifort xlf_r bgxlf_r pgfortran; do
+        if [ -e "$(which ${tryfc} 2>&1)" ] ; then
+            fc=${tryfc}
+        fi
+    done
+    echo ${fc}
+}
+
+detectcompilerversion() {
+    TESTARGUMENTS $# "$*" "compiler"
+    local compiler=$1
+    case $(basename "${compiler}") in
+        core-gcc|gcc|icc|core-g++|g++|icpc|core-gfortran|gfortran|ifort)
+            ${compiler} --version | head -1 | cut -d\) -f 2- | awk '{print $1}'
+            ;;
+        xlc_r|xlc|xlC_r|xlC|xlc++|xlc++_r|xlf_r|xlf|bgxlc_r|bgxlC_r|bgxlf_r|bgxlc|bgxlC|bgxlf|bgxlc++|bgxlc++_r)
+            ${compiler} -qversion 2>/dev/null | grep '^Version: ' | awk '{print $2}'
+            ;;
+        pgcc|pgfortran|pgc++)
+            ${compiler} --version | grep $1 | awk '{print $2}'
+            ;;
+    esac
+}
+
+detectcflags() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    case $(basename "${ccompiler}") in        
+        core-gcc|gcc)
+            if [ ${cpu:0:5} != power ]; then
+                echo "-O3 -funroll-loops -march=$CPU -mtune=$CPU"
+            else
+                echo "-O3 -funroll-loops -mcpu=$CPU -mtune=$CPU"
+            fi
+            ;;
+        icc)
+            echo "-O3 -funroll-loops -xhost"
+            ;;
+        xlc_r|xlc)
+            echo "-O3 -qhot -qstrict -qinline=level=10 -qarch=${CPU/power/pwr} -qtune=${CPU/power/pwr}"
+            ;;
+        bgxlc_r|bgxlc)
+            echo "-O3 -qarch=qp -qtune=qp"           
+            ;;
+        pgcc)
+            echo "-O3 -Munroll -Mvect=simd"
+            ;;
+    esac
+}
+
+detectcxxflags() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu"
+    local cxxcompiler=$1
+    local cxxcompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)  detectcflags "${usecxx%*g++}gcc"         "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)          detectcflags "${usecxx%*icpc}icc"        "${cxxcompilerversion}" "${cpu}" ;;
+        xlC)           detectcflags "${usecxx%*xlC}xlc"         "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r)         detectcflags "${usecxx%*xlC_r}xlc_r"     "${cxxcompilerversion}" "${cpu}" ;;
+        xlc++)         detectcflags "${usecxx%*xlc++}xlc"       "${cxxcompilerversion}" "${cpu}" ;;
+        xlc++_r)       detectcflags "${usecxx%*xlc++_r}xlc_r"   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC)         detectcflags "${usecxx%*bgxlC}bgxlc"     "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r)       detectcflags "${usecxx%*bgxlC_r}bgxlc_r" "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)         detectcflags "${usecxx%*pgc++}pgcc"      "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectfflags() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename "${fortrancompiler}") in
+        core-gfortran|gfortran)  detectcflags ${usefc%*gfortran}gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectcflags ${usefc%*ifort}icc        "${fortrancompilerversion}" "${cpu}" ;;
+        xlf)                     detectcflags ${usefc%*xlf}xlc          "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r)                   detectcflags ${usefc%*xlf_r}xlc_r      "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf)                   detectcflags ${usefc%*bgxlf}bgxlc      "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r)                 detectcflags ${usefc%*bgxlf_r}bgxlc_r  "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectcflags ${usefc%*pgfortran}pgcc   "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectcflagsomp() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu"
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    case $(basename "${ccompiler}") in
+        core-gcc|gcc)             echo "-fopenmp"            ;;
+        icc)                      echo "-qopenmp"            ;;
+        xlc_r|xlc|bgxlc_r|bgxlc)  echo "-qsmp=omp"           ;; 
+        pgcc)                     echo "-mp"                 ;;
+        nvcc)                     echo "-Xcompiler -fopenmp" ;;
+    esac
+}
+
+detectclinkflagsomp() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    case $(basename "${ccompiler}") in
+        core-gcc|gcc)             echo "-fopenmp"            ;;
+        icc)                      echo "-qopenmp"            ;;
+        xlc_r|xlc|bgxlc_r|bgxlc)  echo "-qsmp=omp"           ;;
+        pgcc)                     echo "-mp"                 ;; # unconfirmed
+        nvcc)                     echo "-Xlinker -fopenmp"   ;;
+    esac
+}
+
+detectcflagsompoffload() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    case $(basename "${ccompiler}") in
+        core-gcc|gcc)             echo "-fopenmp -foffload=nvptx-none"         ;;
+        icc)                      :                                            ;; 
+        xlc_r|xlc|bgxlc_r|bgxlc)  echo "-qsmp=noauto:omp -qoffload -Xptxas -v" ;; 
+        pgcc)                     :                                            ;;
+    esac
+}
+
+detectclinkflagsompoffload() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    case $(basename "${ccompiler}") in
+        core-gcc|gcc)             echo "-fopenmp -foffload=nvptx-none"    ;;
+        icc)                      :                                       ;;
+        xlc_r|xlc|bgxlc_r|bgxlc)  echo "-qsmp=noauto -qsmp=omp -qoffload" ;;
+        pgcc)                     :                                       ;;
+    esac
+}
+
+detectcxxflagsomp() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu"
+    local cxxcompiler=$1
+    local cxxcompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectcflagsomp gcc     "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectcflagsomp icc     "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectcflagsomp xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectcflagsomp bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectcflagsomp pgcc    "${cxxcompilerversion}" "${cpu}" ;;
+        nvcc)                             detectcflagsomp nvcc    "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectcxxlinkflagsomp() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu"
+    local cxxcompiler=$1
+    local cxxcompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectclinkflagsomp gcc     "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectclinkflagsomp icc     "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectclinkflagsomp xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectclinkflagsomp bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectclinkflagsomp pgcc    "${cxxcompilerversion}" "${cpu}" ;;
+        nvcc)                             detectclinkflagsomp nvcc    "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectcxxflagsompoffload() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu"
+    local cxxcompiler=$1
+    local cxxcompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectcflagsompoffload gcc         "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectcflagsompoffload icc         "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectclinkflagsompoffload xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectclinkflagsompoffload bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectcflagsompoffload pgcc        "${cxxcompilerversion}" "${cpu}" ;;
+        nvcc)                             detectcflagsompoffload nvcc        "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectcxxlinkflagsompoffload() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu"
+    local cxxcompiler=$1
+    local cxxcompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectclinkflagsompoffload gcc     "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectclinkflagsompoffload icc     "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectclinkflagsompoffload xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectclinkflagsompoffload bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectclinkflagsompoffload pgcc    "${cxxcompilerversion}" "${cpu}" ;;
+        nvcc)                             detectclinkflagsompoffload nvcc    "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectfflagsomp() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename "${fortrancompiler}") in
+        core-gfortran|gfortran)  detectcflagsomp gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectcflagsomp icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectcflagsomp xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectcflagsomp bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectcflagsomp pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectflinkflagsomp() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename ${fortrancompiler}) in
+        core-gfortran|gfortran)  detectclinkflagsomp gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectclinkflagsomp icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectclinkflagsomp xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectclinkflagsomp bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectclinkflagsomp pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectfflagsompoffload() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename ${fortrancompiler}) in
+        core-gfortran|gfortran)  detectcflagsompoffload gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectcflagsompoffload icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectcflagsompoffload xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectcflagsompoffload bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectcflagsompoffload pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectflinkflagsompoffload() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename ${fortrancompiler}) in
+        core-gfortran|gfortran)  detectclinkflagsompoffload gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectclinkflagsompoffload icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectclinkflagsompoffload xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectclinkflagsompoffload bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectclinkflagsompoffload pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectf77fixedflags() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion"
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    case $(basename ${fortrancompiler}) in
+        core-gfortran|gfortran)  echo '-ffixed-form -ffixed-line-length=132' ;;
+        ifort)                   echo '-fixed -extend-source 132' ;;
+        xlf_r|xlf)               echo '-qfixed=132'  ;;
+        bgxlf_r|bgxlf)           echo '-qfixed=132'  ;;
+        pgfortran)               echo '-Mfixed -Mextend'  ;;
+    esac
+}
+
+detectcflagsopt() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    local baseflags=$(detectcflags "${ccompiler}" "${ccompilerversion}" "${cpu}")
+    local moreflags
+    case $(basename "${ccompiler}") in        
+        core-gcc|gcc)
+            baseflags=${baseflags//-O?/}
+            moreflags="-Ofast"
+            ;;
+        icc)
+            baseflags=${baseflags//-O?/}
+            moreflags="-Ofast" 
+            ;;
+        xlc_r|xlc|bgxlc_r|bgxlc)  
+            baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-qstrict/}
+            moreflags="-Ofast -qnostrict"
+            ;;
+        pgcc)
+            baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-Munroll/}
+            moreflags="-fast -O4"
+            ;;
+    esac
+    echo $baseflags $moreflags
+}
+
+detectcxxflagsopt() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu" 
+    local cxxompiler=$1
+    local cxxompilerversion=$2
+    local cpu=$3
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectcflagsopt gcc     "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectcflagsopt icc     "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectcflagsopt xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectcflagsopt bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectcflagsopt pgcc    "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectfflagsopt() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu" 
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename "${fortrancompiler}") in
+        core-gfortran|gfortran)  detectcflagsopt gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectcflagsopt icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectcflagsopt xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectcflagsopt bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectcflagsopt pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectnvidiagpus() 
+{
+    TESTARGUMENTS $# "$*"
+    if which nvidia-smi &> /dev/null ; then
+        echo $(nvidia-smi -q | grep -iF 'Product Name' | sed -e 's/.*Product Name\s*:\s\(.*\)/\1/' | awk -F- '{print $1}' | tr ' ' '-' ) | tr ' ' ','
+    fi
+}
+
+detectnvidiadriverversion() 
+{
+    TESTARGUMENTS $# "$*"
+    if which nvidia-smi &> /dev/null ; then
+        nvidia-smi -q | grep -iF 'Driver Version' | sed -e 's/.*Driver Version\s*:\s\([0-9][0-9.]*\)/\1/' 
+    fi
+}
+
+detectcomputecapability()
+{
+    TESTARGUMENTS $# "$*" "commaseparatedgpulist"
+    local commaseparatedgpulist=$1
+    # using data taken from: https://developer.nvidia.com/cuda-gpus#compute
+    local mincc=1000000
+    local card
+    local thiscc
+    IFS=,
+    for card in ${commaseparatedgpulist}; do
+        unset IFS
+        case "$card" in
+            Tesla-T4|Quadro-RTX|Quadro-RTX-8000|Quadro-RTX-6000|Quadro-RTX-5000|Quadro-RTX-4000|TITAN-RTX|Geforce-RTX-2080-Ti|Geforce-RTX-2080|Geforce-RTX-2070|Geforce-RTX-2060|Geforce-RTX-2080|Geforce-RTX-2070|Geforce-RTX-2060)
+                thiscc=75 ;;
+            Jetson-AGX-Xavier)
+                thiscc=72 ;;
+            Tesla-V100|Quadro-GV100|Titan-V)
+ 	            thiscc=70 ;;
+            Jetson-TX2)
+                thiscc=62 ;;
+            Tesla-P40|Tesla-P4|Quadro-P6000|Quadro-P5000|Quadro-P4000|Quadro-P3000|Quadro-P2000|Quadro-P1000|Quadro-P620|Quadro-P600|Quadro-P400|Quadro-P5200|Quadro-P4200|Quadro-P3200|Quadro-P5000|Quadro-P4000|Quadro-P3000|Quadro-P2000|Quadro-P1000|Quadro-P600|Quadro-P500|TITAN-Xp|TITAN-X|GeForce-GTX-1080-Ti|GeForce-GTX-1080|GeForce-GTX-1070|GeForce-GTX-1060|GeForce-GTX-1050|GeForce-GTX-1080|GeForce-GTX-1070|GeForce-GTX-1060)
+                thiscc=61 ;;
+            Tesla-P100|Quadro-GP100)
+                thiscc=60 ;;
+            Jetson-Nano|Jetson-TX1|Tegra-X1)
+                thiscc=53 ;;
+            Tesla-M60|Tesla|Quadro-M6000|Quadro-M5000|Quadro-M4000|Quadro-M2000|GeForce-GTX-TITAN-X|GeForce-GTX-980-Ti|GeForce-GTX-980|GeForce-GTX-970|GeForce-GTX-960|GeForce-GTX-950|GeForce-GTX-980|GeForce-GTX-980M|GeForce-GTX-970M|GeForce-GTX-965M|GeForce-910M)
+                thiscc=52 ;;
+            Quadro-K1200|Quadro-K620|NVS-810|GeForce-GTX-750-Ti|GeForce-GTX-750|GeForce-GTX-960M|GeForce-GTX-950M|GeForce-940M|GeForce-930M|GeForce-GTX-850M|GeForce-840M|GeForce-830M)
+                thiscc=50 ;;
+            Tesla-K80)
+                thiscc=37 ;;
+            Tesla-K40|Tesla-K20|Quadro-K6000|Quadro-K5200|Quadro-M5500M|Quadro-K610M|Quadro-K510M|GeForce-GT-730|GeForce-GT-720|GeForce-GT-705|GeForce-GT-640-GDDR5|GeForce-GTX-TITAN-Z|GeForce-GTX-TITAN-Black|GeForce-GTX-TITAN|GeForce-GTX-780-Ti|GeForce-GTX-780|GeForce-920M)
+                thiscc=35 ;;
+            Tesla-K10|Quadro-K5000|Quadro-K4200|Quadro-K4000|Quadro-K2200|Quadro-K2000|Quadro-K2000D|Quadro-K600|Quadro-K420|Quadro-410|Quadro-K6000M|Quadro-K5200M|Quadro-K5100M|Quadro-K500M|Quadro-K4200M|Quadro-K4100M|Quadro-K3100M|Quadro-K2200M|Quadro-K2100M|Quadro-K1100M|NVS-510|GeForce-GTX-770|GeForce-GTX-760|GeForce-GTX-690|GeForce-GTX-680|GeForce-GTX-670|GeForce-GTX-660-Ti|GeForce-GTX-660|GeForce-GTX-650-Ti|GeForce-GTX-650|GeForce-GT-740|GeForce-GTX-880M|GeForce-GTX-870M|GeForce-GTX-860M|GeForce-GTX-780M|GeForce-GTX-770M|GeForce-GTX-765M|GeForce-GTX-760M|GeForce-GTX-680MX|GeForce-GTX-680M|GeForce-GTX-675MX|GeForce-GTX-670MX|GeForce-GTX-660M|GeForce-GT-755M|GeForce-GT-750M|GeForce-GT-650M|GeForce-GT-745M|GeForce-GT-645M|GeForce-GT-740M|GeForce-GT-730M|GeForce-GT-640M|GeForce-GT-640M-LE|GeForce-GT-735M|GeForce-GT-730M)
+                thiscc=30 ;;
+            NVS-315|NVS-310|NVS-5400M|NVS-5200M|NVS-4200M|GeForce-GTX-560-Ti|GeForce-GTX-550-Ti|GeForce-GTX-460|GeForce-GTS-450|GeForce-GT-730-DDR3-128bit|GeForce-GT-640-GDDR3|GeForce-GT-630|GeForce-GT-620|GeForce-GT-610|GeForce-GT-520|GeForce-GT-440|GeForce-GT-430|GeForce-GT-635M|GeForce-GT-630M|GeForce-GT-625M|GeForce-GT-720M|GeForce-GT-620M|GeForce-710M|GeForce-705M|GeForce-610M|GeForce-GTX-580M|GeForce-GTX-570M|GeForce-GTX-560M|GeForce-GT-555M|GeForce-GT-550M|GeForce-GT-540M|GeForce-GT-525M|GeForce-GT-520MX|GeForce-GT-520M|GeForce-GTX-485M|GeForce-GTX-470M|GeForce-GTX-460M|GeForce-GT-445M|GeForce-GT-435M|GeForce-GT-420M|GeForce-GT-415M|GeForce-710M|GeForce-410M|GeForce-820M|GeForce-800M|GeForce-GTX-675M|GeForce-GTX-670M)
+                thiscc=21 ;;
+            Tesla-C2075|Tesla-C2050|Tesla-C2070|Quadro-Plex-7000|Quadro-Plex|GeForce-GTX-590|GeForce-GTX-580|GeForce-GTX-570|GeForce-GTX-480|GeForce-GTX-470|GeForce-GTX-465|GeForce-GTX-480M)
+                thiscc=20 ;;
+            *)
+                thiscc=1000000 ;;
+        esac
+        if ((thiscc < mincc)); then mincc=$thiscc; fi
+    done
+    if ((mincc < 1000000)); then
+        echo $mincc
+    fi
+}
+
+detectcudacxx() {
+    TESTARGUMENTS $# "$*"     
+    if [ -e "$(which nvcc 2>&1)" ] ; then
+        echo nvcc
+    fi
+}
+
+detectcudahostcxx() {
+    TESTARGUMENTS $# "$*" "cudacxx"
+    cudacxx=$1
+    if [ "${CUDACXX}" ]; then
+        local tmpc=$(mktemp)
+        touch ${tmpc}.cc
+        local cudahostgcc=$(cd $(dirname ${tmpc});${CUDACXX} -c --verbose ${tmpc}.cc 2>&1 | sed  -n -e 's/^#$ //' -e 's/gcc .*-c -x c++ .*/gcc/p')
+        rm -f ${tmpc} ${tmpc}.cc ${tmpc}.o
+        cudahostgcc=$(eval echo $cudahostgcc)
+        if which "$cudahostgcc" &>/dev/null ; then 
+            cudahostgcc=$(which "$cudahostgcc")
+            echo ${cudahostgcc%*gcc}g++
+        else
+            echo `which g++`
+        fi
+    fi
+}
+
+detectcudaversion() {
+    TESTARGUMENTS $# "$*" "cudacxx"
+    cudacxx=$1
+    if [ "${cudacxx}" ]; then
+        ${cudacxx} --version | grep release | sed -n 's/.*,\sV\([0-9][0-9.]*\).*/\1/p'
+    fi
+}
+
+detectcudacomputecapability() {
+    TESTARGUMENTS $# "$*" "nvidiacomputecapability cudacompilerversion"
+    local nvidiacomputecapability=$1
+    local cudacompilerversion=$2
+    # data from https://en.wikipedia.org/wiki/CUDA#GPUs_supported
+    local minsupport=30
+    local maxsupport=${nvidiacomputecapability}
+    if [ "${nvidiacomputecapability}" ]; then
+        case "${cudacompilerversion}" in
+            1.0*|1.1*|2.0*)  minsupport=10;  maxsupport=11  ;;
+            2.1*|2.2*|2.3*)  minsupport=10;  maxsupport=13  ;;                
+            3.0*|3.1*)       minsupport=10;  maxsupport=20  ;;
+            3.2*|4.*|5.*)    minsupport=10;  maxsupport=21  ;;
+            6.0*)            minsupport=10;  maxsupport=35  ;;
+            6.5*)            minsupport=11;  maxsupport=59  ;;
+            7.*)             minsupport=20;  maxsupport=59  ;;
+            8.*)             minsupport=20;  maxsupport=69  ;;
+            9.*)             minsupport=30;  maxsupport=72  ;;
+            10.*)            minsupport=30;  maxsupport=75  ;;
+        esac
+        if (( maxsupport < nvidiacomputecapability )); then
+            echo $maxsupport
+        elif (( minsupport <= nvidiacomputecapability )); then
+            echo $nvidiacomputecapability
+        else
+            WARN "Nvidia CUDA compiler version ${cudacompilerversion} does not support compute capability ${nvidiacomputecapability}"
+        fi
+    fi
+}
+
+detectcudaflags() {
+    TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
+    cudacxx=$1
+    cudaversion=$2
+    cudacomputecapability=$3
+    cudahostcxx=$4
+    cudahostcxxversion=$5
+    cpu=$6
+    if [ "${cudacxx}" ]; then
+        if [ "${cudacomputecapability}" ]; then
+            echo -n "-arch=sm_${cudacomputecapability} "
+        fi
+        local underlyinggxxoptions=$(detectcxxflags "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
+        if [ -n "`echo $underlyinggxxoptions`" ]; then
+            echo "-Xcompiler ${underlyinggxxoptions// /,}"
+        else
+            echo ""
+        fi
+    fi
+}
+
+detectcudaflagsopt() {
+    TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
+    cudacxx=$1
+    cudaversion=$2
+    cudacomputecapability=$3
+    cudahostcxx=$4
+    cudahostcxxversion=$5
+    cpu=$6
+    if [ "${cudacxx}" ]; then
+        if [ "${cudacomputecapability}" ]; then
+            echo -n "-arch=sm_${cudacomputecapability} "
+        fi
+        if [ "$cudahostcxx" ] && [ "$(readlink -f $(which ${cudahostcxx}))" != "$(readlink -f $(which g++))" ]; then
+            if [ $(dirname "${cudahostcxx}") = "." ]; then
+                echo -n "-ccbindir $(dirname $(which ${cudahostcxx})) "
+            else
+                echo -n "-ccbindir $(dirname ${cudahostcxx}) "
+            fi
+        fi
+        echo -n "--use_fast_math -Xptxas --allow-expensive-optimizations "
+        local underlyinggxxoptions=$(detectcxxflagsopt "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
+        if [ -n "`echo $underlyinggxxoptions`" ]; then
+            echo "-Xcompiler ${underlyinggxxoptions// /,}"
+        else
+            echo ""
+        fi
+    fi
+}
+
+
+# Use these functions to set or keep variables
+
+SYSTEMNAME=${SYSTEM:-$(detectsystemname)}
+SYSTEMVERSION=${SYSTEMVERSION:-$(detectsystemversion)}
+OSNAME=${OS:-$(detectos)}
+OSVERSION=${OSVERSION:-$(detectosversion)}
+MACHINEARCH=${MACHINEARCH:-$(detectmachine)}
+MACHINEVENDOR=${MACHINEVENDOR:-$(detectvendor "$MACHINEARCH")}
+
+CC=${CC:-$(detectcc)}
+CXX=${CXX:-$(detectcxx)}
+FC=${FC:-$(detectfc)}
+
+CPU=${CPU:-$(detectcpu "$MACHINEARCH")}
+
+# query compiler versions in parallel
+if [ -z "$CCOMPILERVERSION"  ]; then out1=$(mktemp); detectcompilerversion ${CC}  > $out1 & fi
+if [ -z "$CXXCOMPILERVERSION" ]; then out2=$(mktemp); detectcompilerversion ${CXX} > $out2 & fi
+if [ -z "$FORTRANCOMPILERVERSION"  ]; then out3=$(mktemp); detectcompilerversion ${FC}  > $out3 & fi
+wait
+[ -z "$CCOMPILERVERSION" ]  &&  CCOMPILERVERSION=$(cat $out1; rm -f $out1)
+[ -z "$CXXCOMPILERVERSION" ] && CXXCOMPILERVERSION=$(cat $out2; rm -f $out2)
+[ -z "$FORTRANCOMPILERVERSION" ]  &&  FORTRANCOMPILERVERSION=$(cat $out3; rm -f $out3)
+
+F77=${F77:-$(echo ${FC} $(detectf77fixedflags "${FC}" "${FORTRANCOMPILERVERSION}"))}
+
+CFLAGS=${CFLAGS:-$(detectcflags "$CC" "$CCOMPILERVERSION" "$CPU")}
+CXXFLAGS=${CXXFLAGS:-$(detectcxxflags "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
+FFLAGS=${FFLAGS:-$(detectfflags "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+
+OPENMPCFLAGS=${OPENMPCFLAGS:-$(detectcflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
+OPENMPCXXFLAGS=${OPENMPCXXFLAGS:-$(detectcxxflagsomp "$CXX" "$CCOMPILERVERSION" "$CPU")}
+OPENMPFFLAGS=${OPENMPFFLAGS:-$(detectfflagsomp "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+
+CFLAGSOPT=${CFLAGSOPT:-$(detectcflagsopt "$CC" "$CCOMPILERVERSION" "$CPU")}
+CXXFLAGSOPT=${CXXFLAGSOPT:-$(detectcxxflagsopt "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
+FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+
+OPENMPCLDFLAGS=${OPENMPCLDFLAGS:-$(detectclinkflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
+OPENMPCXXLDFLAGS=${OPENMPCXXLDFLAGS:-$(detectcxxlinkflagsomp "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
+OPENMPFLDFLAGS=${OPENMPFLDFLAGS:-$(detectflinkflagsomp "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+
+GPUS=${GPUS:-$(detectnvidiagpus)}
+if [ "$GPUS" ]; then
+    GPUVENDOR=NVIDIA
+else
+    GPUVENDOR=
+fi
+NVIDIADRIVERVERSION=${NVIDIADRIVERVERSION:-$(detectnvidiadriverversion)}
+NVIDIACOMPUTECAPABILITY=${NVIDIACOMPUTECAPABILITY:-$(detectcomputecapability "${GPUS}")}
+
+if [ "$GPUS" ]; then
+    OPENMPGPUCFLAGS=${OPENMPGPUCFLAGS:-$(detectcflagsompoffload "$CC" "$CCOMPILERVERSION" "$CPU")}
+    OPENMPGPUCXXFLAGS=${OPENMPGPUCXXFLAGS:-$(detectcxxflagsompoffload "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
+    OPENMPGPUFFLAGS=${OPENMPGPUFFLAGS:-$(detectfflagsompoffload "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+    OPENMPGPUCLDFLAGS=${OPENMPGPUCLDFLAGS:-$(detectclinkflagsompoffload "$CC" "$CCOMPILERVERSION" "$CPU")}
+    OPENMPGPUCXXLDFLAGS=${OPENMPGPUCXXLDFLAGS:-$(detectcxxlinkflagsompoffload "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
+    OPENMPGPUFLDFLAGS=${OPENMPGPUFLDFLAGS:-$(detectflinkflagsompoffload "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+else
+    OPENMPGPUCFLAGS=
+    OPENMPGPUCXXFLAGS=
+    OPENMPGPUFFLAGS=
+    OPENMPGPUCLDFLAGS=
+    OPENMPGPUCXXLDFLAGS=
+    OPENMPGPUFLDFLAGS=
+fi
+
+CUDACXX=${CUDACXX:-$(detectcudacxx)}
+if [ "${CUDACXX}" ]; then
+    CUDACOMPILERVERSION=${CUDACOMPILERVERSION:-$(detectcudaversion "${CUDACXX}")}    
+    CUDACOMPUTECAPABILITY=${CUDACOMPUTECAPABILITY:-$(detectcudacomputecapability "${NVIDIACOMPUTECAPABILITY}" "${CUDACOMPILERVERSION}")}
+    CUDAHOSTCXX=${CUDAHOSTCXX:-$(detectcudahostcxx "${CUDACXX}")}
+    CUDAHOSTCXXCOMPILERVERSION=$(detectcompilerversion "${CUDAHOSTCXX}")
+    CUDAFLAGS=${CUDAFLAGS:-$(detectcudaflags "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    CUDAFLAGSOPT=${CUDAFLAGSOPT:-$(detectcudaflagsopt "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    #CUDAFLAGSOMP=${CUDAFLAGSOMP:-$(detectcudaflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} 
+    #CUDALINKFLAGSOMP=${CUDALINKFLAGSOMP:-$(detectcudalinkflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    # extract flags in CUDACXX into CUDAFLAGS* and remove from CUDACXX
+    morecudaflags=${CUDACXX#*nvcc}
+    if [ "${morecudaflags:0:1}" = " " ]; then
+        morecudaflags=${morecudaflags:1}
+        CUDACXX="${CUDACXX%%nvcc*}nvcc"
+        CUDAFLAGSOPT="$morecudaflags ${CUDAFLAGSOPT}"
+        CUDALINKFLAGSOMP="$morecudaflags ${CUDALINKFLAGSOMP}"
+    fi  
+else
+    CUDAHOSTCXX=
+    CUDAHOSTCXXCOMPILERVERSION=
+    CUDACOMPILERVERSION=
+    CUDAFLAGS=
+    CUDAFLAGSOPT=
+    CUDAFLAGSOMP=
+    CUDALINKFLAGSOMP=
+fi
+
+# Determine output options
+
+while true; do
+    case "${1-}" in
+        make|makefile)
+            prefix=""; equals=" = "; quote=""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        sh|-sh|bash|-bash)
+            prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        oneline-sh|oneline--sh|oneline-bash|oneline--bash)
+            prefix=""; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
+            break;;
+        export|env-sh|env--sh|env-bash|env--bash)
+            prefix="export "; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        csh|tcsh)
+            prefix="set "; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        setenv|env-csh|env-tcsh)
+            prefix="setenv "; equals=" "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        c|c++)
+            prefix="const char "; equals="[] = "; quote="\""; endl=";\n"; commentstart="/* "; commentend=" */"
+            break;;
+        python)
+            prefix=""; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            break;;
+        env)
+            PARENTCMD=($(/bin/ps -ocommand= -p $PPID))
+            PARENT=${PARENTCMD[0]}
+            PARENT=${PARENT##*/}
+            PARENT=${PARENT%%:*}
+            PARENT=${PARENT#*-}
+            set "env-$PARENT"
+            continue
+            ;;           
+        *)
+            PARENTCMD=($(/bin/ps -ocommand= -p $PPID))
+            PARENT=${PARENTCMD[0]}
+            PARENT=${PARENT##*/}
+            PARENT=${PARENT%%:*}
+            PARENT=${PARENT#*-}
+            if [ "$PARENT" != "${1-}" ]; then
+                set "$PARENT"
+                continue
+            else
+                prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+                break
+            fi
+            ;;
+    esac
+done
+
+# Output based on formatting determined above
+
+for var in \
+    '-Operating system and hardware properties' \
+    SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
+    '-C compiler and options' \
+    CC  CCOMPILERVERSION  CFLAGS   CFLAGSOPT   OPENMPCFLAGS   OPENMPCLDFLAGS OPENMPGPUCFLAGS OPENMPGPUCLDFLAGS \
+    '-C++ compiler and options' \
+    CXX CXXCOMPILERVERSION CXXFLAGS CXXFLAGSOPT OPENMPCXXFLAGS OPENMPCXXLDFLAGS OPENMPGPUCXXFLAGS OPENMPGPUCXXLDFLAGS \
+    '-Fortran compiler and options' \
+    FC  FORTRANCOMPILERVERSION  FFLAGS  FFLAGSOPT  OPENMPFFLAGS  OPENMPFLDFLAGS OPENMPGPUFFLAGS OPENMPGPUFLDFLAGS F77 \
+    '-CUDA compiler and options' \
+    CUDACXX CUDACOMPILERVERSION CUDAHOSTCXX CUDAHOSTCXXCOMPILERVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSOPT CUDAFLAGSOMP CUDALINKFLAGSOMP
+do
+    if [ ${var:0:1} = - ]; then # an initial '-' character signals a comment
+        if [ "$endl" = "\n" ]; then # leave out comments when producing a oneliner
+            echo "${commentstart}${var:1}${commentend}"
+        fi
+    else
+        echo -n "${prefix}$var${equals}${quote}${!var}${quote}"; echo -ne "${endl}"
+    fi
+done
