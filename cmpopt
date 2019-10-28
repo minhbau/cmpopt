@@ -253,6 +253,66 @@ detectcompilerversion() {
     esac
 }
 
+detecttargetarch() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cxxcompiler cxxcompilerversion fortrancompiler fortrancompilerversion cpu"
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cxxcompiler=$3
+    local cxxcompilerversion=$4
+    local fortrancompiler=$5
+    local fortrancompilerversion=$6
+    local cpu=$7
+    local found=0
+    for compiler in "$ccompiler" "$cxxcompiler" "$fortrancompiler"; do
+        case $(basename "${compiler}") in
+            *gcc|*g++|*gfortran)
+                if [ $found = 0 ]; then
+                    if [ ${cpu:0:5} != power ]; then
+                        echo "-march=${cpu} -mtune=${cpu}"
+                    else
+                        echo "-mcpu=${cpu} -mtune=${cpu}"
+                    fi
+                    found=1
+                elif [ ${found} != 1 ]; then
+                    WARN "$found TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                fi
+                ;;
+            icc|icpc|ifort)
+                if [ ${found} = 0 ]; then
+                    echo "--xhost"
+                    found=2
+                elif [ ${found} != 2 ]; then
+                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                fi
+                ;;
+            xlc_r|xlc|xlC_r|xlC|xlc++_r|xlc++|xlf_r|xlf)
+                if [ ${found} = 0 ]; then
+                    echo "-qarch=${cpu/power/pwr} -qtune=${cpu/power/pwr}"
+                    found=3
+                elif [ ${found} != 3 ]; then
+                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                fi
+                ;;
+            bgxlc_r|bgxlc|bgxlC_r|bgxlC|bgxlc++_r|bgxlc++|bgxlf_r|bgxlf)
+                if [ ${found} = 0 ]; then
+                    echo "-qarch=qp -qtune=qp"
+                    found=4
+                elif [ ${found} != 4 ]; then
+                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                fi
+                ;;
+            pgcc)
+                if [ ${found} = 0 ]; then
+                    echo ""
+                    found=5
+                elif [ ${found} != 5 ]; then
+                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                fi
+                ;;
+        esac
+    done
+}
+
 detectcflags() {
     TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
     local ccompiler=$1
@@ -260,22 +320,18 @@ detectcflags() {
     local cpu=$3
     case $(basename "${ccompiler}") in        
         core-gcc|gcc)
-            if [ ${cpu:0:5} != power ]; then
-                echo "-O3 -funroll-loops -march=$CPU -mtune=$CPU"
-            else
-                echo "-O3 -funroll-loops -mcpu=$CPU -mtune=$CPU"
-            fi
+            echo "-O3 -funroll-loops"
             ;;
         icc)
-            echo "-O3 -funroll-loops -xhost"
+            echo "-O3 -funroll-loops"
             ;;
         xlc_r|xlc)
-            echo "-O3 -qhot -qstrict -qinline=level=10 -qarch=${CPU/power/pwr} -qtune=${CPU/power/pwr}"
+            echo "-O3 -qhot -qstrict -qinline=level=10"
             ;;
         bgxlc_r|bgxlc)
-            echo "-O3 -qarch=qp -qtune=qp"           
+            echo "-O3"  
             ;;
-        pgcc)
+        pgcc|pgc++|pgfortran)
             echo "-O3 -Munroll -Mvect=simd"
             ;;
     esac
@@ -766,6 +822,8 @@ CFLAGS=${CFLAGS:-$(detectcflags "$CC" "$CCOMPILERVERSION" "$CPU")}
 CXXFLAGS=${CXXFLAGS:-$(detectcxxflags "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
 FFLAGS=${FFLAGS:-$(detectfflags "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
 
+TARGET_ARCH=${TARGET_ARCH:-$(detecttargetarch "$CC" "$CCOMPILERVERSION" "$CXX" "$CXXCOMPILERVERSION" "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+
 OPENMPCFLAGS=${OPENMPCFLAGS:-$(detectcflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
 OPENMPCXXFLAGS=${OPENMPCXXFLAGS:-$(detectcxxflagsomp "$CXX" "$CCOMPILERVERSION" "$CPU")}
 OPENMPFFLAGS=${OPENMPFFLAGS:-$(detectfflagsomp "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
@@ -777,6 +835,12 @@ FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FORTRANCOMPILERVERSION" "$CPU")
 OPENMPCLDFLAGS=${OPENMPCLDFLAGS:-$(detectclinkflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
 OPENMPCXXLDFLAGS=${OPENMPCXXLDFLAGS:-$(detectcxxlinkflagsomp "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
 OPENMPFLDFLAGS=${OPENMPFLDFLAGS:-$(detectflinkflagsomp "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+NOPENMPLDFLAGS=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
+if (( ${NOPENMPLDFLAGS} > 1 )); then
+    WARN "OPENMPLDFLAGS not the same among C, C++ and Fortran linkers"
+fi
+# use the longest of these 
+OPENMPLDFLAGS=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
 
 GPUS=${GPUS:-$(detectnvidiagpus)}
 if [ "$GPUS" ]; then
@@ -794,13 +858,17 @@ if [ "$GPUS" ]; then
     OPENMPGPUCLDFLAGS=${OPENMPGPUCLDFLAGS:-$(detectclinkflagsompoffload "$CC" "$CCOMPILERVERSION" "$CPU")}
     OPENMPGPUCXXLDFLAGS=${OPENMPGPUCXXLDFLAGS:-$(detectcxxlinkflagsompoffload "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
     OPENMPGPUFLDFLAGS=${OPENMPGPUFLDFLAGS:-$(detectflinkflagsompoffload "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+    NOPENMPGPULDFLAGS=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
+    if (( ${NOPENMPGPULDFLAGS} > 1 )); then
+        WARN "OPENMPGPULDFLAGS not the same among C, C++ and Fortran linkers"
+    fi
+    # use the longest of these 
+    OPENMPGPULDFLAGS=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
 else
     OPENMPGPUCFLAGS=
     OPENMPGPUCXXFLAGS=
     OPENMPGPUFFLAGS=
-    OPENMPGPUCLDFLAGS=
-    OPENMPGPUCXXLDFLAGS=
-    OPENMPGPUFLDFLAGS=
+    OPENMPGPULDFLAGS=
 fi
 
 CUDACXX=${CUDACXX:-$(detectcudacxx)}
@@ -853,8 +921,14 @@ while true; do
         setenv|env-csh|env-tcsh)
             prefix="setenv "; equals=" "; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
-        c|c++)
+        tsv)
+            prefix=""; equals="	"; quote=""; endl="\n"; commentstart="* "; commentend=" *"
+            break;;
+        c)
             prefix="const char "; equals="[] = "; quote="\""; endl=";\n"; commentstart="/* "; commentend=" */"
+            break;;
+        c++)
+            prefix="std::string "; equals=" = "; quote="\""; endl=";\n"; commentstart="// "; commentend=""
             break;;
         python)
             prefix=""; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
@@ -890,17 +964,21 @@ done
 for var in \
     '-Operating system and hardware properties' \
     SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
+    '-CC/CXX/FC common options' \
+    TARGET_ARCH \
     '-C compiler and options' \
-    CC  CCOMPILERVERSION  CFLAGS   CFLAGSOPT   OPENMPCFLAGS   OPENMPCLDFLAGS OPENMPGPUCFLAGS OPENMPGPUCLDFLAGS \
+    CC  CCOMPILERVERSION  CFLAGS   CFLAGSOPT   OPENMPCFLAGS  OPENMPGPUCFLAGS \
     '-C++ compiler and options' \
-    CXX CXXCOMPILERVERSION CXXFLAGS CXXFLAGSOPT OPENMPCXXFLAGS OPENMPCXXLDFLAGS OPENMPGPUCXXFLAGS OPENMPGPUCXXLDFLAGS \
+    CXX CXXCOMPILERVERSION CXXFLAGS CXXFLAGSOPT OPENMPCXXFLAGS OPENMPGPUCXXFLAGS \
     '-Fortran compiler and options' \
-    FC  FORTRANCOMPILERVERSION  FFLAGS  FFLAGSOPT  OPENMPFFLAGS  OPENMPFLDFLAGS OPENMPGPUFFLAGS OPENMPGPUFLDFLAGS F77 \
+    FC  FORTRANCOMPILERVERSION  FFLAGS  FFLAGSOPT  OPENMPFFLAGS  OPENMPGPUFFLAGS  F77 \
+    '-Linking options' \
+    OPENMPLDFLAGS OPENMPGPULDFLAGS \
     '-CUDA compiler and options' \
     CUDACXX CUDACOMPILERVERSION CUDAHOSTCXX CUDAHOSTCXXCOMPILERVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSOPT CUDAFLAGSOMP CUDALINKFLAGSOMP
 do
     if [ ${var:0:1} = - ]; then # an initial '-' character signals a comment
-        if [ "$endl" = "\n" ]; then # leave out comments when producing a oneliner
+        if [[ "$endl" = "\n" ]] || [[ "$endl" = ";\n" ]] ; then # leave out comments when producing a oneliner
             echo "${commentstart}${var:1}${commentend}"
         fi
     else

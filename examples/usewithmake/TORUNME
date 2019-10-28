@@ -1,0 +1,3 @@
+cmpopt make > config.mk
+make
+make run

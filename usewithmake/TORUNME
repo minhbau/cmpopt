@@ -1,3 +1,0 @@
-cmpopt make > cmpopt.mk
-make
-make run
