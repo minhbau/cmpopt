@@ -27,8 +27,8 @@
 # /usr/bin. You only need sudo if the prefix is a directory to which
 # you have no write permissions.
 
-PREFIX?=/usr/bin
+PREFIX?=/usr
 
 install: cmpopt
-	mkdir -p ${PREFIX}
-	cp -f cmpopt ${PREFIX}
+	mkdir -p ${PREFIX}/bin
+	cp -f cmpopt ${PREFIX}/bin

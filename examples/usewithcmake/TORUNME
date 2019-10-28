@@ -1,0 +1,4 @@
+cmpopt cmake > config.cmake
+mkdir build && cd build && cmake ..
+make
+./testcmpopt

@@ -52,24 +52,22 @@ if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
 	Produces code for variable assignments in the language set by the command lines
 	argument or the current shell, for the following variables:
 
-	  - Operating system and hardware properties:
-	      SYSTEMNAME SYSTEMVERSION OS OSVERSION MACHINEARCH MACHINEVENDOR CPU GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
+	- Operating system and hardware properties:
+	   SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR 
+	   CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
 
-	  - C compiler and options:
-	      CC*  CFLAGS*  CFLAGSOPT  CCOMPILERVERSION  OPENMPCFLAGS  OPENMPCLDFLAGS 
-	      OPENMPGPUCFLAGS OPENMPGPUCLDFLAGS 
+	- C compiler and options:
+	   CC* CFLAGS* CFLAGSOPT  CCOMPILERVERSION  OPENMPCFLAGS OPENMPGPUCFLAGS
 
-	  - C++ compiler and options:
-	      CXX*  CXXFLAGS*  CXXFLAGSOPT  CXXCOMPILERVERSION  OPENMPCXXFLAGS 
-	      OPENMPCXXLDFLAGS  OPENMPGPUCXXFLAGS  OPENMPGPUCXXLDFLAGS 
+	- C++ compiler and options:
+	   CXX* CXXFLAGS* CXXFLAGSOPT CXXCOMPILERVERSION OPENMPCXXFLAGS OPENMPGPUCXXFLAGS
 
-	  - Fortran compiler and options:
-	      FC*  FFLAGS*  FORTRANCOMPILERVERSION  FFLAGSOPT  OPENMPFFLAGS  
-	      OPENMPFLDFLAGS  OPENMPGPUFFLAGS  OPENMPGPUFLDFLAGS  F77
+	- Fortran compiler and options:
+	   FC* FFLAGS* FFLAGSOPT FORTRANCOMPILERVERSION OPENMPFFLAGS OPENMPGPUFFLAGS F77
 	      
-	  - CUDA compiler and options
-	      CUDACXX*  CUDAFLAGS*  CUDAHOSTCXX*  CUDACOMPILERVERSION  CUDAHOSTCXXCOMPILERVERSION 
-	      CUDAFLAGSOPT  CUDAFLAGSOMP  CUDALINKFLAGSOMP
+	- CUDA compiler and options
+	   CUDACXX* CUDAFLAGS* CUDAHOSTCXX* CUDACOMPILERVERSION
+	   CUDAHOSTCXXCOMPILERVERSION CUDAFLAGSOPT CUDAFLAGSOMP CUDALINKFLAGSOMP
    
 	Note that if any of these variables are already set in the environment, 
 	'cmpopt' takes the values in the environment instead of detecting them.
@@ -901,37 +899,64 @@ fi
 
 # Determine output options
 
+asis()
+{
+    echo "$@"
+}
+
+cmakemap()
+{
+    case "$@" in
+        CC)          echo -n CMAKE_C_COMPILER;;
+        CFLAGS)      echo -n CMAKE_C_FLAGS;;
+        CXX)         echo -n CMAKE_CXX_COMPILER;;
+        CXXFLAGS)    echo -n CMAKE_CXX_FLAGS;;
+        FC)          echo -n CMAKE_Fortran_COMPILER;;
+        FFLAGS)      echo -n CMAKE_Fortran_FLAGS;;
+        CUDACXX)     echo -n CMAKE_CUDA_COMPILER;;
+        CUDAFLAGS)   echo -n CMAKE_CUDA_FLAGS;;
+        CUDAHOSTCXX) echo -n CMAKE_CUDA_HOST_COMPILER;;
+        *) echo "$@" ;;
+    esac
+}
+
 while true; do
     case "${1-}" in
         make|makefile)
-            prefix=""; equals=" = "; quote=""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix=""; equals=" = "; quote=""; endl="\n"; commentstart="# "; commentend=""
             break;;
         sh|-sh|bash|-bash)
-            prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
         oneline-sh|oneline--sh|oneline-bash|oneline--bash)
-            prefix=""; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
+            namemap=asis; prefix=""; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
+            break;;
+        oneline-cmake)
+            namemap=cmakemap; prefix="-D"; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
+            break;;
+        cmake)
+            namemap=cmakemap; prefix="set( "; equals=" "; quote="\""; endl=" )\n"; commentstart="# "; commentend=""
             break;;
         export|env-sh|env--sh|env-bash|env--bash)
-            prefix="export "; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix="export "; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
         csh|tcsh)
-            prefix="set "; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix="set "; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
         setenv|env-csh|env-tcsh)
-            prefix="setenv "; equals=" "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix="setenv "; equals=" "; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
         tsv)
-            prefix=""; equals="	"; quote=""; endl="\n"; commentstart="* "; commentend=" *"
+            namemap=asis; prefix=""; equals="	"; quote=""; endl="\n"; commentstart="* "; commentend=" *"
             break;;
         c)
-            prefix="const char "; equals="[] = "; quote="\""; endl=";\n"; commentstart="/* "; commentend=" */"
+            namemap=asis; prefix="const char "; equals="[] = "; quote="\""; endl=";\n"; commentstart="/* "; commentend=" */"
             break;;
         c++)
-            prefix="std::string "; equals=" = "; quote="\""; endl=";\n"; commentstart="// "; commentend=""
+            namemap=asis; prefix="std::string "; equals=" = "; quote="\""; endl=";\n"; commentstart="// "; commentend=""
             break;;
         python)
-            prefix=""; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
+            namemap=asis; prefix=""; equals=" = "; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
         env)
             PARENTCMD=($(/bin/ps -ocommand= -p $PPID))
@@ -952,7 +977,7 @@ while true; do
                 set "$PARENT"
                 continue
             else
-                prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
+                namemap=asis; prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
                 break
             fi
             ;;
@@ -982,6 +1007,7 @@ do
             echo "${commentstart}${var:1}${commentend}"
         fi
     else
-        echo -n "${prefix}$var${equals}${quote}${!var}${quote}"; echo -ne "${endl}"
+        truevar=$(eval $namemap $var)
+        echo -n "${prefix}$truevar${equals}${quote}${!var}${quote}"; echo -ne "${endl}"
     fi
 done
