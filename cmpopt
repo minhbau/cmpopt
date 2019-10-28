@@ -272,7 +272,7 @@ detecttargetarch() {
                     fi
                     found=1
                 elif [ ${found} != 1 ]; then
-                    WARN "$found TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                    WARN "$found TARGETARCH option not the same among C, C++ and Fortran compilers"
                 fi
                 ;;
             icc|icpc|ifort)
@@ -280,7 +280,7 @@ detecttargetarch() {
                     echo "--xhost"
                     found=2
                 elif [ ${found} != 2 ]; then
-                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                    WARN "TARGETARCH option not the same among C, C++ and Fortran compilers"
                 fi
                 ;;
             xlc_r|xlc|xlC_r|xlC|xlc++_r|xlc++|xlf_r|xlf)
@@ -288,7 +288,7 @@ detecttargetarch() {
                     echo "-qarch=${cpu/power/pwr} -qtune=${cpu/power/pwr}"
                     found=3
                 elif [ ${found} != 3 ]; then
-                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                    WARN "TARGETARCH option not the same among C, C++ and Fortran compilers"
                 fi
                 ;;
             bgxlc_r|bgxlc|bgxlC_r|bgxlC|bgxlc++_r|bgxlc++|bgxlf_r|bgxlf)
@@ -296,7 +296,7 @@ detecttargetarch() {
                     echo "-qarch=qp -qtune=qp"
                     found=4
                 elif [ ${found} != 4 ]; then
-                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                    WARN "TARGETARCH option not the same among C, C++ and Fortran compilers"
                 fi
                 ;;
             pgcc)
@@ -304,7 +304,7 @@ detecttargetarch() {
                     echo ""
                     found=5
                 elif [ ${found} != 5 ]; then
-                    WARN "TARGET_ARCH option not the same among C, C++ and Fortran compilers"
+                    WARN "TARGETARCH option not the same among C, C++ and Fortran compilers"
                 fi
                 ;;
         esac
@@ -816,19 +816,19 @@ wait
 
 F77=${F77:-$(echo ${FC} $(detectf77fixedflags "${FC}" "${FORTRANCOMPILERVERSION}"))}
 
-CFLAGS=${CFLAGS:-$(detectcflags "$CC" "$CCOMPILERVERSION" "$CPU")}
-CXXFLAGS=${CXXFLAGS:-$(detectcxxflags "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
-FFLAGS=${FFLAGS:-$(detectfflags "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+TARGETARCH=${TARGETARCH:-$(detecttargetarch "$CC" "$CCOMPILERVERSION" "$CXX" "$CXXCOMPILERVERSION" "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
 
-TARGET_ARCH=${TARGET_ARCH:-$(detecttargetarch "$CC" "$CCOMPILERVERSION" "$CXX" "$CXXCOMPILERVERSION" "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+CFLAGS=${CFLAGS:-$(detectcflags "$CC" "$CCOMPILERVERSION" "$CPU") ${TARGETARCH}}
+CXXFLAGS=${CXXFLAGS:-$(detectcxxflags "$CXX" "$CXXCOMPILERVERSION" "$CPU") ${TARGETARCH}}
+FFLAGS=${FFLAGS:-$(detectfflags "$FC" "$FORTRANCOMPILERVERSION" "$CPU") ${TARGETARCH}}
 
 OPENMPCFLAGS=${OPENMPCFLAGS:-$(detectcflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
 OPENMPCXXFLAGS=${OPENMPCXXFLAGS:-$(detectcxxflagsomp "$CXX" "$CCOMPILERVERSION" "$CPU")}
 OPENMPFFLAGS=${OPENMPFFLAGS:-$(detectfflagsomp "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
 
-CFLAGSOPT=${CFLAGSOPT:-$(detectcflagsopt "$CC" "$CCOMPILERVERSION" "$CPU")}
-CXXFLAGSOPT=${CXXFLAGSOPT:-$(detectcxxflagsopt "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
-FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FORTRANCOMPILERVERSION" "$CPU")}
+CFLAGSOPT=${CFLAGSOPT:-$(detectcflagsopt "$CC" "$CCOMPILERVERSION" "$CPU") ${TARGETARCH}}
+CXXFLAGSOPT=${CXXFLAGSOPT:-$(detectcxxflagsopt "$CXX" "$CXXCOMPILERVERSION" "$CPU") ${TARGETARCH}}
+FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FORTRANCOMPILERVERSION" "$CPU") ${TARGETARCH}}
 
 OPENMPCLDFLAGS=${OPENMPCLDFLAGS:-$(detectclinkflagsomp "$CC" "$CCOMPILERVERSION" "$CPU")}
 OPENMPCXXLDFLAGS=${OPENMPCXXLDFLAGS:-$(detectcxxlinkflagsomp "$CXX" "$CXXCOMPILERVERSION" "$CPU")}
@@ -935,7 +935,7 @@ while true; do
             namemap=cmakemap; prefix="-D"; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
             break;;
         cmake)
-            namemap=cmakemap; prefix="set( "; equals=" "; quote="\""; endl=" )\n"; commentstart="# "; commentend=""
+            namemap=cmakemap; prefix="set("; equals=" "; quote="\""; endl=' CACHE STRING "" FORCE)\n'; commentstart="# "; commentend=""
             break;;
         export|env-sh|env--sh|env-bash|env--bash)
             namemap=asis; prefix="export "; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
@@ -990,7 +990,7 @@ for var in \
     '-Operating system and hardware properties' \
     SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
     '-CC/CXX/FC common options' \
-    TARGET_ARCH \
+    TARGETARCH \
     '-C compiler and options' \
     CC  CCOMPILERVERSION  CFLAGS   CFLAGSOPT   OPENMPCFLAGS  OPENMPGPUCFLAGS \
     '-C++ compiler and options' \
