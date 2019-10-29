@@ -92,23 +92,23 @@ if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
 	argument or the current shell, for the following variables:
 
 	  - Operating system and hardware properties:
-	      SYSTEMNAME SYSTEMVERSION OS OSVERSION MACHINEARCH MACHINEVENDOR CPU GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
+	      SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR CPU GPUS GPUVENDOR NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
 
 	  - C compiler and options:
-	      CC*  CFLAGS*  CFLAGSOPT  CCVERSION  OPENMPCFLAGS  OPENMPCLDFLAGS 
-	      OPENMPGPUCFLAGS OPENMPGPUCLDFLAGS 
+	      CC  CFLAGS  CFLAGSOPT  CCVERSION  EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU
 
 	  - C++ compiler and options:
-	      CXX*  CXXFLAGS*  CXXFLAGSOPT  CXXVERSION  OPENMPCXXFLAGS 
-	      OPENMPCXXLDFLAGS  OPENMPGPUCXXFLAGS  OPENMPGPUCXXLDFLAGS 
+	      CXX  CXXFLAGS  CXXFLAGSOPT  CXXVERSION  EXTRACXXFLAGSOMP  EXTRACXXFLAGSOMPGPU
 
 	  - Fortran compiler and options:
-	      FC*  FFLAGS*  FCVERSION  FFLAGSOPT  OPENMPFFLAGS  
-	      OPENMPFLDFLAGS  OPENMPGPUFFLAGS  OPENMPGPUFLDFLAGS  F77
+	      FC  FFLAGS  FCVERSION  FFLAGSOPT  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77
 	      
+      - Common C/C++/Fortran flags
+	      TARGETARCH  EXTRALINKFLAGSOMP  EXTRALINKFLAGSOMPGPU 
+
 	  - CUDA compiler and options
-	      CUDACXX*  CUDAFLAGS*  CUDAHOSTCXX*  CUDACOMPILERVERSION  CUDAHOSTCXXVERSION 
-	      CUDAFLAGSOPT  CUDAFLAGSOMP  CUDALINKFLAGSOMP
+	      CUDACXX  CUDAFLAGS  CUDAHOSTCXX  CUDAVERSION  CUDAHOSTCXXVERSION 
+	      CUDAFLAGSOPT  EXTRACUDAFLAGSOMP  EXTRACUDALINKFLAGSOMP
    
 	Note that if any of these variables are already set in the environment, 
 	'cmpopt' takes the values in the environment instead of detecting them.
@@ -201,9 +201,9 @@ while true; do
             fi
             ;;
         *)  if [ -z "${1-}" ]; then 
-            ERROR "main" "Missing first argument."
+            ERROR "main" "Missing first argument (try 'cmpopt --help')."
             else
-            ERROR "main" "Invalid first argument ${1-}."
+            ERROR "main" "Invalid first argument ${1-} (try 'cmpopt --help')."
             fi
             ;;
     esac
@@ -377,7 +377,7 @@ detecttargetarch() {
                 ;;
             icc|icpc|ifort)
                 if [ ${found} = 0 ]; then
-                    echo "--xhost"
+                    echo "-xhost"
                     found=2
                 elif [ ${found} != 2 ]; then
                     WARN "TARGETARCH option not the same among C, C++ and Fortran compilers"
@@ -889,6 +889,39 @@ detectcudaflagsopt() {
     fi
 }
 
+detectcudaflagsomp()
+{
+    TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
+    cudacxx=$1
+    cudaversion=$2
+    cudacomputecapability=$3
+    cudahostcxx=$4
+    cudahostcxxversion=$5
+    cpu=$6
+    if [ "${cudacxx}" ]; then
+        local underlyinggxxoptions=$(detectcxxflagsomp "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
+        if [ -n "`echo $underlyinggxxoptions`" ]; then
+            echo "-Xlinker ${underlyinggxxoptions// /,}"
+        fi
+    fi
+}
+
+detectcudalinkflagsomp()
+{
+    TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
+    cudacxx=$1
+    cudaversion=$2
+    cudacomputecapability=$3
+    cudahostcxx=$4
+    cudahostcxxversion=$5
+    cpu=$6
+    if [ "${cudacxx}" ]; then
+        local underlyinggxxoptions=$(detectcxxlinkflagsomp "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
+        if [ -n "`echo $underlyinggxxoptions`" ]; then
+            echo "-Xlinker ${underlyinggxxoptions// /,}"
+        fi
+    fi
+}
 
 # Use these functions to set or keep variables
 
@@ -914,7 +947,9 @@ wait
 [ -z "$CXXVERSION" ] && CXXVERSION=$(cat $out2; rm -f $out2)
 [ -z "$FCVERSION" ]  &&  FCVERSION=$(cat $out3; rm -f $out3)
 
-F77=${F77:-$(echo ${FC} $(detectf77fixedflags "${FC}" "${FCVERSION}"))}
+if [ "${F77-}" = "$FC" -o -z "${F77-}" ]; then
+    F77="${FC} $(detectf77fixedflags "${FC}" "${FCVERSION}")"
+fi
 
 TARGETARCH=${TARGETARCH:-$(detecttargetarch "$CC" "$CCVERSION" "$CXX" "$CXXVERSION" "$FC" "$FCVERSION" "$CPU")}
 
@@ -922,9 +957,9 @@ CFLAGS=${CFLAGS:-$(detectcflags "$CC" "$CCVERSION" "$CPU") ${TARGETARCH}}
 CXXFLAGS=${CXXFLAGS:-$(detectcxxflags "$CXX" "$CXXVERSION" "$CPU") ${TARGETARCH}}
 FFLAGS=${FFLAGS:-$(detectfflags "$FC" "$FCVERSION" "$CPU") ${TARGETARCH}}
 
-OPENMPCFLAGS=${OPENMPCFLAGS:-$(detectcflagsomp "$CC" "$CCVERSION" "$CPU")}
-OPENMPCXXFLAGS=${OPENMPCXXFLAGS:-$(detectcxxflagsomp "$CXX" "$CCVERSION" "$CPU")}
-OPENMPFFLAGS=${OPENMPFFLAGS:-$(detectfflagsomp "$FC" "$FCVERSION" "$CPU")}
+EXTRACFLAGSOMP=${EXTRACFLAGSOMP:-$(detectcflagsomp "$CC" "$CCVERSION" "$CPU")}
+EXTRACXXFLAGSOMP=${EXTRACXXFLAGSOMP:-$(detectcxxflagsomp "$CXX" "$CCVERSION" "$CPU")}
+EXTRAFFLAGSOMP=${EXTRAFFLAGSOMP:-$(detectfflagsomp "$FC" "$FCVERSION" "$CPU")}
 
 CFLAGSOPT=${CFLAGSOPT:-$(detectcflagsopt "$CC" "$CCVERSION" "$CPU") ${TARGETARCH}}
 CXXFLAGSOPT=${CXXFLAGSOPT:-$(detectcxxflagsopt "$CXX" "$CXXVERSION" "$CPU") ${TARGETARCH}}
@@ -933,12 +968,12 @@ FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FCVERSION" "$CPU") ${TARGETARCH
 OPENMPCLDFLAGS=${OPENMPCLDFLAGS:-$(detectclinkflagsomp "$CC" "$CCVERSION" "$CPU")}
 OPENMPCXXLDFLAGS=${OPENMPCXXLDFLAGS:-$(detectcxxlinkflagsomp "$CXX" "$CXXVERSION" "$CPU")}
 OPENMPFLDFLAGS=${OPENMPFLDFLAGS:-$(detectflinkflagsomp "$FC" "$FCVERSION" "$CPU")}
-NOPENMPLDFLAGS=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
-if (( ${NOPENMPLDFLAGS} > 1 )); then
-    WARN "OPENMPLDFLAGS not the same among C, C++ and Fortran linkers"
+NEXTRALINKFLAGSOMP=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
+if (( ${NEXTRALINKFLAGSOMP} > 1 )); then
+    WARN "EXTRALINKFLAGSOMP not the same among C, C++ and Fortran linkers"
 fi
 # use the longest of these 
-OPENMPLDFLAGS=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
+EXTRALINKFLAGSOMP=$(echo -e "$OPENMPCLDFLAGS\n$OPENMPCXXLDFLAGS\n$OPENMPFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
 
 GPUS=${GPUS:-$(detectnvidiagpus)}
 if [ "$GPUS" ]; then
@@ -950,74 +985,75 @@ NVIDIADRIVERVERSION=${NVIDIADRIVERVERSION:-$(detectnvidiadriverversion)}
 NVIDIACOMPUTECAPABILITY=${NVIDIACOMPUTECAPABILITY:-$(detectcomputecapability "${GPUS}")}
 
 if [ "$GPUS" ]; then
-    OPENMPGPUCFLAGS=${OPENMPGPUCFLAGS:-$(detectcflagsompoffload "$CC" "$CCVERSION" "$CPU")}
-    OPENMPGPUCXXFLAGS=${OPENMPGPUCXXFLAGS:-$(detectcxxflagsompoffload "$CXX" "$CXXVERSION" "$CPU")}
-    OPENMPGPUFFLAGS=${OPENMPGPUFFLAGS:-$(detectfflagsompoffload "$FC" "$FCVERSION" "$CPU")}
+    EXTRACFLAGSOMPGPU=${EXTRACFLAGSOMPGPU:-$(detectcflagsompoffload "$CC" "$CCVERSION" "$CPU")}
+    EXTRACXXFLAGSOMPGPU=${EXTRACXXFLAGSOMPGPU:-$(detectcxxflagsompoffload "$CXX" "$CXXVERSION" "$CPU")}
+    EXTRAFFLAGSOMPGPU=${EXTRAFFLAGSOMPGPU:-$(detectfflagsompoffload "$FC" "$FCVERSION" "$CPU")}
     OPENMPGPUCLDFLAGS=${OPENMPGPUCLDFLAGS:-$(detectclinkflagsompoffload "$CC" "$CCVERSION" "$CPU")}
     OPENMPGPUCXXLDFLAGS=${OPENMPGPUCXXLDFLAGS:-$(detectcxxlinkflagsompoffload "$CXX" "$CXXVERSION" "$CPU")}
     OPENMPGPUFLDFLAGS=${OPENMPGPUFLDFLAGS:-$(detectflinkflagsompoffload "$FC" "$FCVERSION" "$CPU")}
-    NOPENMPGPULDFLAGS=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
-    if (( ${NOPENMPGPULDFLAGS} > 1 )); then
-        WARN "OPENMPGPULDFLAGS not the same among C, C++ and Fortran linkers"
+    NEXTRALINKFLAGSOMPGPU=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | sed '/^$/d' | uniq | wc -l)
+    if (( ${NEXTRALINKFLAGSOMPGPU} > 1 )); then
+        WARN "EXTRALINKFLAGSOMPGPU not the same among C, C++ and Fortran linkers"
     fi
     # use the longest of these 
-    OPENMPGPULDFLAGS=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
+    EXTRALINKFLAGSOMPGPU=$(echo -e "$OPENMPGPUCLDFLAGS\n$OPENMPGPUCXXLDFLAGS\n$OPENMPGPUFLDFLAGS" | perl -ne 'push @a, $_; END{ print sort { length $a <=> length $b } @a }' | tail -n1)
 else
-    OPENMPGPUCFLAGS=
-    OPENMPGPUCXXFLAGS=
-    OPENMPGPUFFLAGS=
-    OPENMPGPULDFLAGS=
+    EXTRACFLAGSOMPGPU=
+    EXTRACXXFLAGSOMPGPU=
+    EXTRAFFLAGSOMPGPU=
+    EXTRALINKFLAGSOMPGPU=
 fi
 
 CUDACXX=${CUDACXX:-$(detectcudacxx)}
 if [ "${CUDACXX}" ]; then
-    CUDACOMPILERVERSION=${CUDACOMPILERVERSION:-$(detectcudaversion "${CUDACXX}")}    
-    CUDACOMPUTECAPABILITY=${CUDACOMPUTECAPABILITY:-$(detectcudacomputecapability "${NVIDIACOMPUTECAPABILITY}" "${CUDACOMPILERVERSION}")}
+    CUDAVERSION=${CUDAVERSION:-$(detectcudaversion "${CUDACXX}")}    
+    CUDACOMPUTECAPABILITY=${CUDACOMPUTECAPABILITY:-$(detectcudacomputecapability "${NVIDIACOMPUTECAPABILITY}" "${CUDAVERSION}")}
     CUDAHOSTCXX=${CUDAHOSTCXX:-$(detectcudahostcxx "${CUDACXX}")}
     CUDAHOSTCXXVERSION=$(detectcompilerversion "${CUDAHOSTCXX}")
     CUDAFLAGS=${CUDAFLAGS:-$(detectcudaflags "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
     CUDAFLAGSOPT=${CUDAFLAGSOPT:-$(detectcudaflagsopt "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
-    #CUDAFLAGSOMP=${CUDAFLAGSOMP:-$(detectcudaflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} 
-    #CUDALINKFLAGSOMP=${CUDALINKFLAGSOMP:-$(detectcudalinkflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    EXTRACUDAFLAGSOMP=${EXTRACUDAFLAGSOMP:-$(detectcudaflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} # ???
+    EXTRACUDALINKFLAGSOMP=${EXTRACUDALINKFLAGSOMP:-$(detectcudalinkflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} # ???
     # extract flags in CUDACXX into CUDAFLAGS* and remove from CUDACXX
     morecudaflags=${CUDACXX#*nvcc}
     if [ "${morecudaflags:0:1}" = " " ]; then
         morecudaflags=${morecudaflags:1}
         CUDACXX="${CUDACXX%%nvcc*}nvcc"
         CUDAFLAGSOPT="$morecudaflags ${CUDAFLAGSOPT}"
-        CUDALINKFLAGSOMP="$morecudaflags ${CUDALINKFLAGSOMP}"
+        EXTRACUDALINKFLAGSOMP="$morecudaflags ${EXTRACUDALINKFLAGSOMP}"
     fi  
 else
     CUDAHOSTCXX=
     CUDAHOSTCXXVERSION=
-    CUDACOMPILERVERSION=
+    CUDAVERSION=
     CUDAFLAGS=
     CUDAFLAGSOPT=
-    CUDAFLAGSOMP=
-    CUDALINKFLAGSOMP=
+    EXTRACUDAFLAGSOMP=
+    EXTRACUDALINKFLAGSOMP=
 fi
 
 # Output based on formatting determined above
 
+filter=${2:-*}
 for var in \
     '-Operating system and hardware properties' \
     SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
     '-CC/CXX/FC common options' \
-    TARGETARCH \
+    TARGETARCH EXTRALINKFLAGSOMP EXTRALINKFLAGSOMPGPU \
     '-C compiler and options' \
-    CC  CCVERSION  CFLAGS   CFLAGSOPT   OPENMPCFLAGS  OPENMPGPUCFLAGS \
+    CC  CCVERSION  CFLAGS   CFLAGSOPT   EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU \
     '-C++ compiler and options' \
-    CXX CXXVERSION CXXFLAGS CXXFLAGSOPT OPENMPCXXFLAGS OPENMPGPUCXXFLAGS \
+    CXX CXXVERSION CXXFLAGS CXXFLAGSOPT EXTRACXXFLAGSOMP EXTRACXXFLAGSOMPGPU \
     '-Fortran compiler and options' \
-    FC  FCVERSION  FFLAGS  FFLAGSOPT  OPENMPFFLAGS  OPENMPGPUFFLAGS  F77 \
-    '-Linking options' \
-    OPENMPLDFLAGS OPENMPGPULDFLAGS \
+    FC  FCVERSION  FFLAGS  FFLAGSOPT  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77 \
     '-CUDA compiler and options' \
-    CUDACXX CUDACOMPILERVERSION CUDAHOSTCXX CUDAHOSTCXXVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSOPT CUDAFLAGSOMP CUDALINKFLAGSOMP
+    CUDACXX CUDAVERSION CUDAHOSTCXX CUDAHOSTCXXVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSOPT EXTRACUDAFLAGSOMP EXTRACUDALINKFLAGSOMP
 do
     if [ ${var:0:1} = - ]; then # an initial '-' character signals a comment
+        if [ "$filter" = "*" ]; then
         if [[ "$endl" = "\n" ]] || [[ "$endl" = ";\n" ]] ; then # leave out comments when producing a oneliner
             echo "${commentstart}${var:1}${commentend}"
+        fi
         fi
     else
         if [[ $var =~ ${2-:*} ]]; then
