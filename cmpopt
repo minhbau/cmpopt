@@ -92,7 +92,7 @@ if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
 	argument or the current shell, for the following variables:
 
 	  - Operating system and hardware properties:
-	      SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR CPU GPUS GPUVENDOR NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
+	      SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION CPUARCH CPUVENDOR CPU GPUS GPUVENDOR NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
 
 	  - C compiler and options:
 	      CC  CFLAGS  CFLAGSOPT  CCVERSION  EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU
@@ -126,16 +126,19 @@ asis()
 cmakemap()
 {
     case "$@" in
-        CC)          echo -n CMAKE_C_COMPILER;;
-        CFLAGS)      echo -n CMAKE_C_FLAGS;;
-        CXX)         echo -n CMAKE_CXX_COMPILER;;
-        CXXFLAGS)    echo -n CMAKE_CXX_FLAGS;;
-        FC)          echo -n CMAKE_Fortran_COMPILER;;
-        FFLAGS)      echo -n CMAKE_Fortran_FLAGS;;
-        CUDACXX)     echo -n CMAKE_CUDA_COMPILER;;
-        CUDAFLAGS)   echo -n CMAKE_CUDA_FLAGS;;
-        CUDAHOSTCXX) echo -n CMAKE_CUDA_HOST_COMPILER;;
-        *) echo "$@" ;;
+        CC)             echo -n CMAKE_C_COMPILER;;
+        CFLAGS)         echo -n CMAKE_C_FLAGS;;
+        CXX)            echo -n CMAKE_CXX_COMPILER;;
+        CXXFLAGS)       echo -n CMAKE_CXX_FLAGS;;
+        FC)             echo -n CMAKE_Fortran_COMPILER;;
+        FFLAGS)         echo -n CMAKE_Fortran_FLAGS;;
+        CUDACXX)        echo -n CMAKE_CUDA_COMPILER;;
+        CUDAFLAGS)      echo -n CMAKE_CUDA_FLAGS;;
+        CUDAHOSTCXX)    echo -n CMAKE_CUDA_HOST_COMPILER;;
+        SYSTEMNAME)     echo -n CMAKE_HOST_SYSTEM_NAME;;
+        SYSTEMVERSION)  echo -n CMAKE_HOST_SYSTEM_VERSION;;
+        CPUARCH)        echo -n CMAKE_HOST_SYSTEM_PROCESSOR;;
+        *)              echo -n "$@" ;;
     esac
 }
 
@@ -929,14 +932,14 @@ SYSTEMNAME=${SYSTEM:-$(detectsystemname)}
 SYSTEMVERSION=${SYSTEMVERSION:-$(detectsystemversion)}
 OSNAME=${OS:-$(detectos)}
 OSVERSION=${OSVERSION:-$(detectosversion)}
-MACHINEARCH=${MACHINEARCH:-$(detectmachine)}
-MACHINEVENDOR=${MACHINEVENDOR:-$(detectvendor "$MACHINEARCH")}
+CPUARCH=${CPUARCH:-$(detectmachine)}
+CPUVENDOR=${CPUVENDOR:-$(detectvendor "$CPUARCH")}
 
 CC=${CC:-$(detectcc)}
 CXX=${CXX:-$(detectcxx)}
 FC=${FC:-$(detectfc)}
 
-CPU=${CPU:-$(detectcpu "$MACHINEARCH")}
+CPU=${CPU:-$(detectcpu "$CPUARCH")}
 
 # query compiler versions in parallel
 if [ -z "$CCVERSION"  ]; then out1=$(mktemp); detectcompilerversion ${CC}  > $out1 & fi
@@ -1037,7 +1040,7 @@ fi
 filter=${2:-*}
 for var in \
     '-Operating system and hardware properties' \
-    SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION MACHINEARCH MACHINEVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
+    SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION CPUARCH CPUVENDOR  CPU GPUVENDOR GPUS NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY \
     '-CC/CXX/FC common options' \
     TARGETARCH EXTRALINKFLAGSOMP EXTRALINKFLAGSOMPGPU \
     '-C compiler and options' \
