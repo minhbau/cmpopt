@@ -882,7 +882,7 @@ detectcudaflagsopt() {
                 echo -n "-ccbindir $(dirname ${cudahostcxx}) "
             fi
         fi
-        echo -n "--use_fast_math -Xptxas --allow-expensive-optimizations "
+        echo -n "--use_fast_math -Xptxas -O3 "
         local underlyinggxxoptions=$(detectcxxflagsopt "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
         if [ -n "`echo $underlyinggxxoptions`" ]; then
             echo "-Xcompiler ${underlyinggxxoptions// /,}"
@@ -904,7 +904,7 @@ detectcudaflagsomp()
     if [ "${cudacxx}" ]; then
         local underlyinggxxoptions=$(detectcxxflagsomp "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
         if [ -n "`echo $underlyinggxxoptions`" ]; then
-            echo "-Xlinker ${underlyinggxxoptions// /,}"
+            echo "-Xcompiler ${underlyinggxxoptions// /,}"
         fi
     fi
 }
