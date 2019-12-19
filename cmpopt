@@ -64,7 +64,9 @@ TESTARGUMENTS() {
 
 # catch version argument
 if [ "${1-}" = "-v" -o "${1-}" = "--version" ] ; then
-    echo "cmpopt 1.0.1"
+    echo "cmpopt 1.0.1+dev"
+    echo "Copyright (c) 2019 Ramses van Zon"
+    echo "MIT License"
     exit
 fi
 
@@ -76,7 +78,7 @@ if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
 	         to set for compilation. 
 	
 	Usage:
-	   cmpopt -h|--help
+	   cmpopt -h|--help|-v|--version
 	   cmpopt make|sh|sh-env|csh|csh-env|var|env|cmake|c|c++|python [filter]
 
 	Arguments:
@@ -101,20 +103,20 @@ if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
 	      SYSTEMNAME SYSTEMVERSION OSNAME OSVERSION CPUARCH CPUVENDOR CPU GPUS GPUVENDOR NVIDIADRIVERVERSION NVIDIACOMPUTECAPABILITY 
 
 	  - C compiler and options:
-	      CC  CFLAGS  CFLAGSOPT  CCVERSION  EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU
+	      CC  CFLAGS  CFLAGSDEBUG CFLAGSFAST  CCVERSION  EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU
 
 	  - C++ compiler and options:
-	      CXX  CXXFLAGS  CXXFLAGSOPT  CXXVERSION  EXTRACXXFLAGSOMP  EXTRACXXFLAGSOMPGPU
+	      CXX  CXXFLAGS  CFLAGSDEBUG CXXFLAGSFAST  CXXVERSION  EXTRACXXFLAGSOMP  EXTRACXXFLAGSOMPGPU
 
 	  - Fortran compiler and options:
-	      FC  FFLAGS  FCVERSION  FFLAGSOPT  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77
+	      FC  FFLAGS  FFLAGSDEBUG  FFLAGSFAST  FCVERSION  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77
 	      
       - Common C/C++/Fortran flags
 	      TARGETARCH  EXTRALINKFLAGSOMP  EXTRALINKFLAGSOMPGPU 
 
 	  - CUDA compiler and options
 	      CUDACXX  CUDAFLAGS  CUDAHOSTCXX  CUDAVERSION  CUDAHOSTCXXVERSION 
-	      CUDAFLAGSOPT  EXTRACUDAFLAGSOMP  EXTRACUDALINKFLAGSOMP
+	      CUDAFLAGSDEBUG  CUDAFLAGSFAST  EXTRACUDAFLAGSOMP  EXTRACUDALINKFLAGSOMP
    
 	Note that if any of these variables are already set in the environment, 
 	'cmpopt' takes the values in the environment instead of detecting them.
@@ -156,7 +158,7 @@ while true; do
         sh|-sh|bash|-bash)
             namemap=asis; prefix=""; equals="="; quote="\""; endl="\n"; commentstart="# "; commentend=""
             break;;
-        oneline-sh|oneline--sh|oneline-bash|oneline--bash)
+        oneline|oneline-sh|oneline--sh|oneline-bash|oneline--bash)
             namemap=asis; prefix=""; equals="="; quote="\""; endl=" "; commentstart="# "; commentend=""
             break;;
         oneline-cmake)
@@ -719,6 +721,65 @@ detectfflagsopt() {
     esac
 }
 
+detectcflagsdebug() {
+    TESTARGUMENTS $# "$*" "ccompiler ccompilerversion cpu" 
+    local ccompiler=$1
+    local ccompilerversion=$2
+    local cpu=$3
+    local baseflags=$(detectcflags "${ccompiler}" "${ccompilerversion}" "${cpu}")
+    local moreflags
+    case $(basename "${ccompiler}") in        
+        core-gcc|gcc)
+            baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-funroll-loops/}
+            moreflags="-O0 -g"
+            ;;
+        icc)
+            baseflags=${baseflags//-O?/}
+            moreflags="-O0 -g" 
+            ;;
+        xlc_r|xlc|bgxlc_r|bgxlc)  
+            baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-qstrict/}
+            moreflags="-O0 -qnoopt -g"
+            ;;
+        pgcc)
+            baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-Munroll/}
+            moreflags="-O0 -g"
+            ;;
+    esac
+    echo $baseflags $moreflags
+}
+
+detectcxxflagsdebug() {
+    TESTARGUMENTS $# "$*" "cxxcompiler cxxcompilerversion cpu" 
+    local cxxcompiler=$1
+    local cxxompilerversion=$2
+    local cpu=$3    
+    case $(basename "${cxxcompiler}") in
+        core-g++|g++)                     detectcflagsdebug gcc     "${cxxcompilerversion}" "${cpu}" ;;
+        icpc)                             detectcflagsdebug icc     "${cxxcompilerversion}" "${cpu}" ;;
+        xlC_r|xlC|xlc++_r|xlc++)          detectcflagsdebug xlc_r   "${cxxcompilerversion}" "${cpu}" ;;
+        bgxlC_r|bgxlC|bgxlc++_r|bgxlc++)  detectcflagsdebug bgxlc_r "${cxxcompilerversion}" "${cpu}" ;;
+        pgc++)                            detectcflagsdebug pgcc    "${cxxcompilerversion}" "${cpu}" ;;
+    esac
+}
+
+detectfflagsdebug() {
+    TESTARGUMENTS $# "$*" "fortrancompiler fortrancompilerversion cpu" 
+    local fortrancompiler=$1
+    local fortrancompilerversion=$2
+    local cpu=$3
+    case $(basename "${fortrancompiler}") in
+        core-gfortran|gfortran)  detectcflagsdebug gcc     "${fortrancompilerversion}" "${cpu}" ;;
+        ifort)                   detectcflagsdebug icc     "${fortrancompilerversion}" "${cpu}" ;;
+        xlf_r|xlf)               detectcflagsdebug xlc_r   "${fortrancompilerversion}" "${cpu}" ;;
+        bgxlf_r|bgxlf)           detectcflagsdebug bgxlc_r "${fortrancompilerversion}" "${cpu}" ;;
+        pgfortran)               detectcflagsdebug pgcc    "${fortrancompilerversion}" "${cpu}" ;;
+    esac
+}
+
 detectnvidiagpus() 
 {
     TESTARGUMENTS $# "$*"
@@ -898,6 +959,35 @@ detectcudaflagsopt() {
     fi
 }
 
+detectcudaflagsdebug() {
+    TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
+    cudacxx=$1
+    cudaversion=$2
+    cudacomputecapability=$3
+    cudahostcxx=$4
+    cudahostcxxversion=$5
+    cpu=$6
+    if [ "${cudacxx}" ]; then
+        if [ "${cudacomputecapability}" ]; then
+            echo -n "-arch=sm_${cudacomputecapability} "
+        fi
+        if [ "$cudahostcxx" ] && [ "$(readlink -f $(which ${cudahostcxx}))" != "$(readlink -f $(which g++))" ]; then
+            if [ $(dirname "${cudahostcxx}") = "." ]; then
+                echo -n "-ccbindir $(dirname $(which ${cudahostcxx})) "
+            else
+                echo -n "-ccbindir $(dirname ${cudahostcxx}) "
+            fi
+        fi
+        echo -n "-G -Xptxas -O0 "
+        local underlyinggxxoptions=$(detectcxxflagsdebug "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
+        if [ -n "`echo $underlyinggxxoptions`" ]; then
+            echo "-Xcompiler ${underlyinggxxoptions// /,}"
+        else
+            echo ""
+        fi
+    fi
+}
+
 detectcudaflagsomp()
 {
     TESTARGUMENTS $# "$*" "cudacxx cudaversion cudacomputecapability cudahostcxx cudahostcxxversion cpu"
@@ -970,9 +1060,13 @@ EXTRACFLAGSOMP=${EXTRACFLAGSOMP:-$(detectcflagsomp "$CC" "$CCVERSION" "$CPU")}
 EXTRACXXFLAGSOMP=${EXTRACXXFLAGSOMP:-$(detectcxxflagsomp "$CXX" "$CCVERSION" "$CPU")}
 EXTRAFFLAGSOMP=${EXTRAFFLAGSOMP:-$(detectfflagsomp "$FC" "$FCVERSION" "$CPU")}
 
-CFLAGSOPT=${CFLAGSOPT:-$(detectcflagsopt "$CC" "$CCVERSION" "$CPU") ${TARGETARCH}}
-CXXFLAGSOPT=${CXXFLAGSOPT:-$(detectcxxflagsopt "$CXX" "$CXXVERSION" "$CPU") ${TARGETARCH}}
-FFLAGSOPT=${FFLAGSOPT:-$(detectfflagsopt "$FC" "$FCVERSION" "$CPU") ${TARGETARCH}}
+CFLAGSDEBUG=${CFLAGSDEBUG:-$(detectcflagsdebug "$CC" "$CCVERSION" "$CPU") ${TARGETARCH}}
+CXXFLAGSDEBUG=${CXXFLAGSDEBUG:-$(detectcxxflagsdebug "$CXX" "$CXXVERSION" "$CPU") ${TARGETARCH}}
+FFLAGSDEBUG=${FFLAGSDEBUG:-$(detectfflagsdebug "$FC" "$FCVERSION" "$CPU") ${TARGETARCH}}
+
+CFLAGSFAST=${CFLAGSFAST:-$(detectcflagsopt "$CC" "$CCVERSION" "$CPU") ${TARGETARCH}}
+CXXFLAGSFAST=${CXXFLAGSFAST:-$(detectcxxflagsopt "$CXX" "$CXXVERSION" "$CPU") ${TARGETARCH}}
+FFLAGSFAST=${FFLAGSFAST:-$(detectfflagsopt "$FC" "$FCVERSION" "$CPU") ${TARGETARCH}}
 
 OPENMPCLDFLAGS=${OPENMPCLDFLAGS:-$(detectclinkflagsomp "$CC" "$CCVERSION" "$CPU")}
 OPENMPCXXLDFLAGS=${OPENMPCXXLDFLAGS:-$(detectcxxlinkflagsomp "$CXX" "$CXXVERSION" "$CPU")}
@@ -1020,7 +1114,8 @@ if [ "${CUDACXX}" ]; then
     CUDAHOSTCXX=${CUDAHOSTCXX:-$(detectcudahostcxx "${CUDACXX}")}
     CUDAHOSTCXXVERSION=$(detectcompilerversion "${CUDAHOSTCXX}")
     CUDAFLAGS=${CUDAFLAGS:-$(detectcudaflags "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
-    CUDAFLAGSOPT=${CUDAFLAGSOPT:-$(detectcudaflagsopt "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    CUDAFLAGSFAST=${CUDAFLAGSFAST:-$(detectcudaflagsopt "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
+    CUDAFLAGSDEBUG=${CUDAFLAGSDEBUG:-$(detectcudaflagsdebug "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")}
     EXTRACUDAFLAGSOMP=${EXTRACUDAFLAGSOMP:-$(detectcudaflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} # ???
     EXTRACUDALINKFLAGSOMP=${EXTRACUDALINKFLAGSOMP:-$(detectcudalinkflagsomp "${CUDACXX}" "${CUDAVERSION}" "${CUDACOMPUTECAPABILITY}" "${CUDAHOSTCXX}" "${CUDAHOSTCXXVERSION}" "${CPU}")} # ???
     # extract flags in CUDACXX into CUDAFLAGS* and remove from CUDACXX
@@ -1028,7 +1123,8 @@ if [ "${CUDACXX}" ]; then
     if [ "${morecudaflags:0:1}" = " " ]; then
         morecudaflags=${morecudaflags:1}
         CUDACXX="${CUDACXX%%nvcc*}nvcc"
-        CUDAFLAGSOPT="$morecudaflags ${CUDAFLAGSOPT}"
+        CUDAFLAGSFAST="$morecudaflags ${CUDAFLAGSFAST}"
+        CUDAFLAGSDEBUG="$morecudaflags ${CUDAFLAGSDEBUG}"
         EXTRACUDALINKFLAGSOMP="$morecudaflags ${EXTRACUDALINKFLAGSOMP}"
     fi  
 else
@@ -1036,7 +1132,8 @@ else
     CUDAHOSTCXXVERSION=
     CUDAVERSION=
     CUDAFLAGS=
-    CUDAFLAGSOPT=
+    CUDAFLAGSDEBUG=
+    CUDAFLAGSFAST=
     EXTRACUDAFLAGSOMP=
     EXTRACUDALINKFLAGSOMP=
 fi
@@ -1050,13 +1147,13 @@ for var in \
     '-CC/CXX/FC common options' \
     TARGETARCH EXTRALINKFLAGSOMP EXTRALINKFLAGSOMPGPU \
     '-C compiler and options' \
-    CC  CCVERSION  CFLAGS   CFLAGSOPT   EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU \
+    CC  CCVERSION  CFLAGS  CFLAGSDEBUG  CFLAGSFAST   EXTRACFLAGSOMP  EXTRACFLAGSOMPGPU \
     '-C++ compiler and options' \
-    CXX CXXVERSION CXXFLAGS CXXFLAGSOPT EXTRACXXFLAGSOMP EXTRACXXFLAGSOMPGPU \
+    CXX CXXVERSION CXXFLAGS CXXFLAGSDEBUG CXXFLAGSFAST EXTRACXXFLAGSOMP EXTRACXXFLAGSOMPGPU \
     '-Fortran compiler and options' \
-    FC  FCVERSION  FFLAGS  FFLAGSOPT  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77 \
+    FC  FCVERSION  FFLAGS  FFLAGSDEBUG FFLAGSFAST  EXTRAFFLAGSOMP  EXTRAFFLAGSOMPGPU  F77 \
     '-CUDA compiler and options' \
-    CUDACXX CUDAVERSION CUDAHOSTCXX CUDAHOSTCXXVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSOPT EXTRACUDAFLAGSOMP EXTRACUDALINKFLAGSOMP
+    CUDACXX CUDAVERSION CUDAHOSTCXX CUDAHOSTCXXVERSION CUDACOMPUTECAPABILITY CUDAFLAGS CUDAFLAGSDEBUG CUDAFLAGSFAST EXTRACUDAFLAGSOMP EXTRACUDALINKFLAGSOMP
 do
     if [ ${var:0:1} = - ]; then # an initial '-' character signals a comment
         if [ "$filter" = "*" ]; then
