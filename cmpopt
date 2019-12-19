@@ -502,7 +502,7 @@ detectclinkflagsomp() {
         icc)                      echo "-qopenmp"            ;;
         xlc_r|xlc|bgxlc_r|bgxlc)  echo "-qsmp=omp"           ;;
         pgcc)                     echo "-mp"                 ;; # unconfirmed
-        nvcc)                     echo "-Xlinker -fopenmp"   ;;
+        nvcc)                     echo "-Xcompiler -fopenmp" ;;
     esac
 }
 
@@ -927,7 +927,7 @@ detectcudalinkflagsomp()
     if [ "${cudacxx}" ]; then
         local underlyinggxxoptions=$(detectcxxlinkflagsomp "${cudahostcxx:-g++}" "${cudahostcxxversion}" "${cpu}")
         if [ -n "`echo $underlyinggxxoptions`" ]; then
-            echo "-Xlinker ${underlyinggxxoptions// /,}"
+            echo "-Xcompiler ${underlyinggxxoptions// /,}"
         fi
     fi
 }
