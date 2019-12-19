@@ -64,7 +64,7 @@ TESTARGUMENTS() {
 
 # catch version argument
 if [ "${1-}" = "-v" -o "${1-}" = "--version" ] ; then
-    echo "cmpopt 1.1 "
+    echo "cmpopt 1.1+dev "
     echo "Copyright (c) 2019 Ramses van Zon"
     echo "MIT License"
     exit
@@ -349,7 +349,8 @@ detectfc() {
 detectcompilerversion() {
     TESTARGUMENTS $# "$*" "compiler"
     local compiler=$1
-    case $(basename "${compiler}") in
+    local basenamecompiler=$(basename "${compiler}")
+    case $basenamecompiler in
         core-gcc|gcc|icc|core-g++|g++|icpc|core-gfortran|gfortran|ifort)
             ${compiler} --version | head -1 | cut -d\) -f 2- | awk '{print $1}'
             ;;
@@ -357,7 +358,7 @@ detectcompilerversion() {
             ${compiler} -qversion 2>/dev/null | grep '^Version: ' | awk '{print $2}'
             ;;
         pgcc|pgfortran|pgc++)
-            ${compiler} --version | grep $1 | awk '{print $2}'
+            ${compiler} --version | grep -F "$basenamecompiler" | awk '{print $2}'
             ;;
     esac
 }
@@ -687,6 +688,7 @@ detectcflagsopt() {
         pgcc)
             baseflags=${baseflags//-O?/}
             baseflags=${baseflags//-Munroll/}
+            baseflags=${baseflags//-Mvect=simd/}
             moreflags="-fast -O4"
             ;;
     esac
