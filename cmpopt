@@ -64,7 +64,7 @@ TESTARGUMENTS() {
 
 # catch version argument
 if [ "${1-}" = "-v" -o "${1-}" = "--version" ] ; then
-    echo "cmpopt 1.0"
+    echo "cmpopt 1.0.1"
     exit
 fi
 
