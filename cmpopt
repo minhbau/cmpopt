@@ -742,6 +742,9 @@ detectcflagsdebug() {
             ;;
         xlc_r|xlc|bgxlc_r|bgxlc)  
             baseflags=${baseflags//-O?/}
+            baseflags=${baseflags//-qhot/}
+            baseflags=${baseflags//-qinline=level=??/}
+            baseflags=${baseflags//-qinline=level=?/}
             baseflags=${baseflags//-qstrict/}
             moreflags="-O0 -qnoopt -g"
             ;;
