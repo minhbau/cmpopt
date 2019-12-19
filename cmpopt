@@ -62,6 +62,12 @@ TESTARGUMENTS() {
     fi
 }
 
+# catch version argument
+if [ "${1-}" = "-v" -o "${1-}" = "--version" ] ; then
+    echo "cmpopt 1.0"
+    exit
+fi
+
 # catch help argument
 if [ "${1-}" = "-h" -o "${1-}" = "--help" ] ; then
     cat <<-EOF
