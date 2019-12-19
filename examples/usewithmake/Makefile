@@ -3,23 +3,29 @@
 -include config.mk
 
 LINK.o = $(LINK.cc)
-CXXFLAGS+= $(OPENMPCXXFLAGS)
-#LDFLAGS += $(OPENMPLDFLAGS)
+#CXXFLAGS = $(CXXFLAGSOPT)
+CXXFLAGS += $(EXTRACXXFLAGSOMP)
+LDFLAGS += $(EXTRALINKFLAGSOMP)
 
 APPNAME = testcmpopt
 APPOBJS = $(APPNAME).o
 
 all: $(APPNAME)
 
+# generate the config automatically
+config.mk:
+	cmpopt makefile > $@
+
 $(APPNAME).o: $(APPNAME).cc config.mk
 
-$(APPNAME): $(APPOBJS)
+$(APPNAME): $(APPOBJS) config.mk
+	$(CXX) $(LDFLAGS) -o $@ $(APPOBJS) $(LDLIBS)
 
 run: $(APPNAME)
 	./$(APPNAME)
 
 clean:
-	rm -f  $(APPNAME).o $(APPNAME)
+	rm -f  $(APPOBJS)
 
 distclean: clean
-	rm -f config.mk
+	rm -f config.mk $(APPNAME)

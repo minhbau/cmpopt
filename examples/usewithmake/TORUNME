@@ -1,3 +1,2 @@
-cmpopt make > config.mk
-make
 make run
+# "make distclean" to start over
